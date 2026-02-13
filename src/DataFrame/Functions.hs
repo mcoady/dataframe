@@ -37,17 +37,13 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import qualified DataFrame.IO.CSV as CSV
 import qualified DataFrame.IO.Parquet as Parquet
+import DataFrame.Operators
 import Debug.Trace (trace)
 import Language.Haskell.TH
 import qualified Language.Haskell.TH.Syntax as TH
 import Text.Regex.TDFA
 import Prelude hiding (maximum, minimum)
 import Prelude as P
-
-infix 8 .^^, `div`
-infix 4 .==, .<, .<=, .>=, .>, ./=
-infixr 3 .&&
-infixr 2 .||
 
 name :: (Show a) => Expr a -> T.Text
 name (Col n) = n
@@ -57,13 +53,6 @@ name other =
 
 col :: (Columnable a) => T.Text -> Expr a
 col = Col
-
-as :: (Columnable a) => Expr a -> T.Text -> NamedExpr
-as expr name = (name, UExpr expr)
-
-infixr 0 .=
-(.=) :: (Columnable a) => T.Text -> Expr a -> NamedExpr
-(.=) = flip as
 
 ifThenElse :: (Columnable a) => Expr Bool -> Expr a -> Expr a -> Expr a
 ifThenElse = If
@@ -125,95 +114,24 @@ toDouble =
             }
         )
 
+infix 8 `div`
 div :: (Integral a, Columnable a) => Expr a -> Expr a -> Expr a
 div = lift2Decorated Prelude.div "div" (Just "//") False 7
 
 mod :: (Integral a, Columnable a) => Expr a -> Expr a -> Expr a
 mod = lift2Decorated Prelude.mod "mod" Nothing False 7
 
-(.==) :: (Columnable a, Eq a) => Expr a -> Expr a -> Expr Bool
-(.==) =
-    Binary
-        ( MkBinaryOp
-            { binaryFn = (==)
-            , binaryName = "eq"
-            , binarySymbol = Just "=="
-            , binaryCommutative = True
-            , binaryPrecedence = 4
-            }
-        )
-
-(./=) :: (Columnable a, Eq a) => Expr a -> Expr a -> Expr Bool
-(./=) =
-    Binary
-        ( MkBinaryOp
-            { binaryFn = (/=)
-            , binaryName = "neq"
-            , binarySymbol = Just "/="
-            , binaryCommutative = True
-            , binaryPrecedence = 4
-            }
-        )
-
 eq :: (Columnable a, Eq a) => Expr a -> Expr a -> Expr Bool
 eq = (.==)
-
-(.<) :: (Columnable a, Ord a) => Expr a -> Expr a -> Expr Bool
-(.<) =
-    Binary
-        ( MkBinaryOp
-            { binaryFn = (<)
-            , binaryName = "lt"
-            , binarySymbol = Just "<"
-            , binaryCommutative = False
-            , binaryPrecedence = 4
-            }
-        )
 
 lt :: (Columnable a, Ord a) => Expr a -> Expr a -> Expr Bool
 lt = (.<)
 
-(.>) :: (Columnable a, Ord a) => Expr a -> Expr a -> Expr Bool
-(.>) =
-    Binary
-        ( MkBinaryOp
-            { binaryFn = (>)
-            , binaryName = "gt"
-            , binarySymbol = Just ">"
-            , binaryCommutative = False
-            , binaryPrecedence = 4
-            }
-        )
-
 gt :: (Columnable a, Ord a) => Expr a -> Expr a -> Expr Bool
 gt = (.>)
 
-(.<=) :: (Columnable a, Ord a, Eq a) => Expr a -> Expr a -> Expr Bool
-(.<=) =
-    Binary
-        ( MkBinaryOp
-            { binaryFn = (<=)
-            , binaryName = "leq"
-            , binarySymbol = Just "<="
-            , binaryCommutative = False
-            , binaryPrecedence = 4
-            }
-        )
-
 leq :: (Columnable a, Ord a, Eq a) => Expr a -> Expr a -> Expr Bool
 leq = (.<=)
-
-(.>=) :: (Columnable a, Ord a, Eq a) => Expr a -> Expr a -> Expr Bool
-(.>=) =
-    Binary
-        ( MkBinaryOp
-            { binaryFn = (>=)
-            , binaryName = "geq"
-            , binarySymbol = Just ">="
-            , binaryCommutative = False
-            , binaryPrecedence = 4
-            }
-        )
 
 geq :: (Columnable a, Ord a, Eq a) => Expr a -> Expr a -> Expr Bool
 geq = (.>=)
@@ -221,32 +139,8 @@ geq = (.>=)
 and :: Expr Bool -> Expr Bool -> Expr Bool
 and = (.&&)
 
-(.&&) :: Expr Bool -> Expr Bool -> Expr Bool
-(.&&) =
-    Binary
-        ( MkBinaryOp
-            { binaryFn = (&&)
-            , binaryName = "and"
-            , binarySymbol = Just "&&"
-            , binaryCommutative = True
-            , binaryPrecedence = 3
-            }
-        )
-
 or :: Expr Bool -> Expr Bool -> Expr Bool
 or = (.||)
-
-(.||) :: Expr Bool -> Expr Bool -> Expr Bool
-(.||) =
-    Binary
-        ( MkBinaryOp
-            { binaryFn = (||)
-            , binaryName = "or"
-            , binarySymbol = Just "||"
-            , binaryCommutative = True
-            , binaryPrecedence = 2
-            }
-        )
 
 not :: Expr Bool -> Expr Bool
 not =
@@ -329,10 +223,7 @@ zScore :: Expr Double -> Expr Double
 zScore c = (c - mean c) / stddev c
 
 pow :: (Columnable a, Num a) => Expr a -> Int -> Expr a
-pow expr i = lift2Decorated (^) "pow" (Just "^") False 8 expr (lit i)
-
-(.^^) :: (Columnable a, Num a) => Expr a -> Int -> Expr a
-(.^^) = pow
+pow = (.^^)
 
 relu :: (Columnable a, Num a, Ord a) => Expr a -> Expr a
 relu = lift (Prelude.max 0)
@@ -537,11 +428,19 @@ declareColumnsFromCsvWithOpts opts path = do
     declareColumns df
 
 declareColumns :: DataFrame -> DecsQ
-declareColumns df =
+declareColumns = declareColumnsWithPrefix Nothing
+
+declareColumnsWithPrefix :: Maybe T.Text -> DataFrame -> DecsQ
+declareColumnsWithPrefix prefix df =
     let
         names = (map fst . L.sortBy (compare `on` snd) . M.toList . columnIndices) df
         types = map (columnTypeString . (`unsafeGetColumn` df)) names
-        specs = zipWith (\name type_ -> (name, sanitize name, type_)) names types
+        specs =
+            zipWith
+                ( \name type_ -> (name, maybe "" (sanitize . (<> "_")) prefix <> sanitize name, type_)
+                )
+                names
+                types
      in
         fmap concat $ forM specs $ \(raw, nm, tyStr) -> do
             ty <- typeFromString (words tyStr)

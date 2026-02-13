@@ -30,7 +30,7 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Unboxed as VU
 import Type.Reflection (typeRep)
 
-import DataFrame.Functions ((./=), (.<), (.<=), (.==), (.>), (.>=))
+import DataFrame.Operators
 
 data TreeConfig = TreeConfig
     { maxTreeDepth :: Int

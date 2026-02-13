@@ -134,8 +134,7 @@ module Main where
 import qualified DataFrame as D
 import qualified DataFrame.Functions as F
 
-import DataFrame ((|>))
-import DataFrame.Functions ((.>=), (.&&))
+import DataFrame.Operators
 
 $(F.declareColumnsFromCsvFile "./housing.csv")
 
@@ -161,8 +160,7 @@ module Main where
 import qualified DataFrame as D
 import qualified DataFrame.Functions as F
 
-import DataFrame ((|>))
-import DataFrame.Functions ((.>=), (.&&))
+import DataFrame.Operators
 
 import DataFrame.Monad
 
