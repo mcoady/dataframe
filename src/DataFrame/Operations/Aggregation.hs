@@ -53,6 +53,12 @@ groupBy names df
                 (T.pack $ show $ names L.\\ columnNames df)
                 "groupBy"
                 (columnNames df)
+    | nRows df == 0 =
+        Grouped
+            df
+            names
+            VU.empty
+            (VU.fromList [0])
     | otherwise =
         Grouped
             df
@@ -254,32 +260,23 @@ computeRowHashes indices df = runST $ do
 All ungrouped columns will be dropped.
 -}
 aggregate :: [NamedExpr] -> GroupedDataFrame -> DataFrame
-aggregate aggs gdf@(Grouped df groupingColumns valueIndices offsets)
-    | VU.null valueIndices =
-        let
-            df' = exclude (M.keys (columnIndices df) L.\\ groupingColumns) df
+aggregate aggs gdf@(Grouped df groupingColumns valueIndices offsets) =
+    let
+        df' =
+            selectIndices
+                (VU.map (valueIndices VU.!) (VU.init offsets))
+                (select groupingColumns df)
 
-            f :: NamedExpr -> DataFrame -> DataFrame
-            f (name, UExpr (_ :: Expr a)) = insert name ([] :: [a])
-         in
-            fold f aggs df'
-    | otherwise =
-        let
-            df' =
-                selectIndices
-                    (VU.map (valueIndices VU.!) (VU.init offsets))
-                    (select groupingColumns df)
-
-            f (name, UExpr (expr :: Expr a)) d =
-                let
-                    value = case interpretAggregation @a gdf expr of
-                        Left e -> throw e
-                        Right (UnAggregated _) -> throw $ UnaggregatedException (T.pack $ show expr)
-                        Right (Aggregated (TColumn col)) -> col
-                 in
-                    insertColumn name value d
-         in
-            fold f aggs df'
+        f (name, UExpr (expr :: Expr a)) d =
+            let
+                value = case interpretAggregation @a gdf expr of
+                    Left e -> throw e
+                    Right (UnAggregated _) -> throw $ UnaggregatedException (T.pack $ show expr)
+                    Right (Aggregated (TColumn col)) -> col
+                in
+                insertColumn name value d
+        in
+        fold f aggs df'
 
 selectIndices :: VU.Vector Int -> DataFrame -> DataFrame
 selectIndices xs df =
@@ -290,8 +287,6 @@ selectIndices xs df =
 
 -- | Filter out all non-unique values in a dataframe.
 distinct :: DataFrame -> DataFrame
-distinct df
-    | nRows df == 0 = df
-    | otherwise = selectIndices (VU.map (indices VU.!) (VU.init os)) df
+distinct df = selectIndices (VU.map (indices VU.!) (VU.init os)) df
   where
     (Grouped _ _ indices os) = groupBy (columnNames df) df
